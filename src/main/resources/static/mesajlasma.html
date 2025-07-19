@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerçek Zamanlı Sohbet</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.5.0/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+    <style>
+        /* CSS Kodları Aynen Bırakıldı */
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            height: 100vh;
+            background-color: #f9f9f9;
+            color: #333;
+        }
+
+        .user-list {
+            width: 22%;
+            background-color: #fbfbfb;
+            border-right: 1px solid #e0e0e0;
+            padding: 20px;
+            overflow-y: auto;
+            box-shadow: 2px 0 5px rgba(0, 0, 0, 0.1);
+            border-radius: 0 10px 10px 0;
+        }
+
+        .user-list h3 {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 15px;
+            text-align: center;
+            color: #555;
+        }
+
+        .user-list button {
+            display: block;
+            width: 100%;
+            margin: 10px 0;
+            padding: 12px;
+            background-color: #ffffff;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            text-align: center;
+            cursor: pointer;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+
+        .user-list button:hover {
+            background-color: #e0f7e7;
+            border-color: #80d0a3;
+            color: #008c4a;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .chat-content {
+            width: 78%;
+            display: flex;
+            flex-direction: column;
+            background-color: #ffffff;
+            padding: 10px;
+            box-shadow: -2px 0 5px rgba(0, 0, 0, 0.1);
+        }
+
+        .message-area {
+            flex: 1;
+            padding: 15px;
+            overflow-y: auto;
+            background-color: #fdfdfd;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .message-area li {
+            max-width: 70%;
+            padding: 10px 15px;
+            border-radius: 15px;
+            list-style: none;
+            word-wrap: break-word;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+            line-height: 1.4;
+        }
+
+        /* Bizden giden mesajlar */
+        .message-area .own-message {
+            align-self: flex-end;
+            background-color: #f8f9fa; /* Süt beyazı */
+            color: #333;
+            text-align: right;
+            border: 1px solid #ddd;
+        }
+
+        /* Diğer kullanıcılardan gelen mesajlar */
+        .message-area .other-message {
+            align-self: flex-start;
+            background-color: #c8e6c9; /* Kullanıcılardaki yeşil tonu */
+            color: #155724; /* Kontrastlı yeşil */
+            text-align: left;
+            border: 1px solid #a5d6a7; /* Kenar çizgisi */
+        }
+
+        .chat-input {
+            display: flex;
+            padding: 15px;
+            background-color: #fbfbfb;
+            border-top: 1px solid #e0e0e0;
+            box-shadow: 0 -2px 5px rgba(0, 0, 0, 0.05);
+        }
+
+        .chat-input input {
+            flex: 1;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            margin-right: 10px;
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+
+        .chat-input input:focus {
+            outline: none;
+            border-color: #007bff;
+        }
+
+        .chat-input button {
+            padding: 12px 20px;
+            border: none;
+            background-color: #4caf50; /* Kullanıcıların üzerine geldiği yeşil */
+            color: white;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s ease;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        .chat-input button:hover {
+            background-color: #388e3c; /* Daha koyu yeşil */
+        }
+
+        .chat-input button:active {
+            transform: translateY(2px);
+        }
+    </style>
+    <script>
+        let stompClient = null;
+        let username = '';
+        let currentGetter = null; // Seçilen getter kullanıcı
+        let host = window.location.hostname;
+
+        function getUsernameFromToken(token) {
+            if (!token) return null;
+
+            const payloadBase64 = token.split('.')[1];
+            if (!payloadBase64) return null;
+
+            try {
+                const payload = JSON.parse(atob(payloadBase64));
+                return payload.sub || payload.username || null;
+            } catch (error) {
+                console.error("Token çözme hatası:", error);
+                return null;
+            }
+        }
+
+        function connect() {
+            const token = localStorage.getItem('token');
+            if (!token) {
+                alert("Yetkilendirme hatası: Lütfen giriş yapın.");
+                return;
+            }
+
+            username = getUsernameFromToken(token);
+            if (!username) {
+                alert("Kullanıcı adı alınamadı: Lütfen tekrar giriş yapın.");
+                return;
+            }
+
+            fetch(`https://${host}:8443/api/users`)
+                .then(response => response.json())
+                .then(users => {
+                    users.forEach(user => showUser(user));
+                })
+                .catch(error => console.error('Kullanıcı çekme hatası:', error));
+
+            const socket = new SockJS(`https://${host}:8443/chat-websocket`);
+            stompClient = Stomp.over(socket);
+
+            stompClient.connect({ Authorization: `Bearer ${token}` }, function (frame) {
+                console.log('Connected: ' + frame);
+                stompClient.subscribe(`/user/${username}/queue/private`, function (message) {
+                    showMessage(JSON.parse(message.body));
+                });
+            }, function (error) {
+                console.error('Bağlantı hatası:', error);
+                alert("WebSocket bağlantısı başarısız oldu.");
+            });
+        }
+
+        function sendMessage() {
+            const messageContent = document.getElementById("message").value;
+            if (messageContent && username && currentGetter) {
+                const message = { sender: username, getter: currentGetter, content: messageContent };
+
+                stompClient.send(`/user/${currentGetter}/queue/private`, {}, JSON.stringify(message));
+                stompClient.send(`/app/chat.sendMessage`, {}, JSON.stringify(message));
+                document.getElementById("message").value = "";
+                showMessage(message);
+            } else {
+                alert("Lütfen bir mesaj yazın ve bir alıcı seçin.");
+            }
+        }
+
+        function showMessage(message) {
+            const messageArea = document.getElementById("messageArea");
+            const messageElement = document.createElement('li');
+
+            if (message.sender === username) {
+                messageElement.className = 'own-message';
+                messageElement.textContent = `Sen: ${message.content}`;
+            } else {
+                messageElement.className = 'other-message';
+                messageElement.textContent = `${message.sender}: ${message.content}`;
+            }
+
+            messageArea.appendChild(messageElement);
+            messageArea.scrollTop = messageArea.scrollHeight;
+        }
+
+        function showUser(user) {
+            const userArea = document.getElementById("userArea");
+            const userButton = document.createElement('button');
+            userButton.textContent = user.username;
+            userButton.addEventListener('click', function () {
+                setGetter(user);
+            });
+            userArea.appendChild(userButton);
+        }
+
+        function setGetter(user) {
+            currentGetter = user.username;
+
+            fetch(`https://${host}:8443/${username}/${currentGetter}`)
+                .then(response => response.json())
+                .then(messages => {
+                    document.getElementById("messageArea").innerHTML = "";
+                    messages.forEach(message => showMessage(message));
+                })
+                .catch(error => console.error('Mesajlar çekilirken hata:', error));
+        }
+
+        function navigateToGroupChat() {
+            window.location.href = `/grupmesajlasması.html`;
+        }
+        function navigateToVoiceCall() {
+            window.location.href = `/sesliarama.html`;
+        }
+
+        window.onload = function () {
+            connect();
+        };
+    </script>
+</head>
+<body>
+<div class="user-list" id="userArea">
+    <h3>Kullanıcılar</h3>
+    <button onclick="navigateToGroupChat()">Grup Mesajlaşması</button>
+    <button onclick="navigateToVoiceCall()">Sesli Arama</button>
+</div>
+<div class="chat-content">
+    <ul id="messageArea" class="message-area"></ul>
+    <div class="chat-input">
+        <input type="text" id="message" placeholder="Mesajınızı yazın..." />
+        <button onclick="sendMessage()">Gönder</button>
+    </div>
+</div>
+</body>
+</html>

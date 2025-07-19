@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="tr" xmlns:th="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Giriş Yap</title>
+  <link rel="stylesheet" type="text/css" href="login.css">
+</head>
+<body>
+<h2>Giriş Yap</h2>
+<form action="/login" method="post">
+  <label for="username">Kullanıcı Adı:</label>
+  <input type="text" id="username" name="username" required><br>
+  <label for="password">Şifre:</label>
+  <input type="password" id="password" name="password" required><br>
+  <input type="submit" value="Giriş Yap">
+</form>
+<a href="/register.html">Kayıt Ol</a>
+<script>
+  document.querySelector('form').addEventListener('submit', function(event) {
+    event.preventDefault(); // Formun normal submit davranışını engeller
+
+    // Form alanlarından kullanıcı adı ve şifreyi al
+    const username = document.getElementById('username').value;
+    const password = document.getElementById('password').value;
+
+    // Fetch isteğini gönder
+    fetch('/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ username: username, password: password }),
+    })
+            .then(response => {
+              if (!response.ok) {
+                throw new Error('Giriş başarısız');
+              }
+              return response.json();
+            })
+            .then(data => {
+              if (data.token) {
+                localStorage.setItem('token', data.token);
+                console.log('Login successful');
+                alert('Giriş başarılı!');
+                window.location.href = '/mesajlasma.html';
+              } else {
+                console.error('Token alınamadı');
+              }
+            })
+            .catch(error => {
+              console.error('Hata:', error);
+              alert('Bir hata oluştu.');
+            });
+  });
+</script>
+<p th:if="${error}" th:text="${error}"></p>
+</body>
+</html>

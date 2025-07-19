@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grup Mesajlaşması</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.5.0/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            height: 100vh;
+            background-color: #f4f4f4;
+        }
+
+        .group-list {
+            width: 20%;
+            background-color: #e9e9e9;
+            padding: 10px;
+            overflow-y: auto;
+            border-right: 1px solid #ccc;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .group-list h3 {
+            margin-bottom: 10px;
+        }
+
+        .group-list button {
+            display: block;
+            width: 90%;
+            margin: 5px 0;
+            padding: 10px;
+            background-color: white;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            text-align: center;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .group-list button:hover {
+            background-color: #d9d9d9;
+        }
+
+        .chat-content {
+            width: 80%;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .message-area {
+            flex: 1;
+            padding: 10px;
+            overflow-y: auto;
+            border-bottom: 1px solid #ccc;
+            background-color: #ffffff;
+        }
+
+        .message-area li {
+            margin: 5px 0;
+            padding: 10px;
+            background-color: #f1f1f1;
+            border-radius: 5px;
+            list-style: none;
+            word-wrap: break-word;
+        }
+
+        .chat-input {
+            display: flex;
+            padding: 10px;
+            background-color: #f9f9f9;
+            border-top: 1px solid #ccc;
+        }
+
+        .chat-input input {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            margin-right: 10px;
+        }
+
+        .chat-input button {
+            padding: 10px;
+            border: none;
+            background-color: #007bff;
+            color: white;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+
+        .chat-input button:hover {
+            background-color: #0056b3;
+        }
+    </style>
+    <script>
+        let stompClient = null;
+        let currentGroup = null; // Şu anda katılınan grup
+        let username = '';
+
+        function getUsernameFromToken(token) {
+            if (!token) return null;
+
+            const payloadBase64 = token.split('.')[1];
+            if (!payloadBase64) return null;
+
+            try {
+                const payload = JSON.parse(atob(payloadBase64));
+                return payload.sub || payload.username || null;
+            } catch (error) {
+                console.error("Token çözme hatası:", error);
+                return null;
+            }
+        }
+
+        function connect() {
+            const token = localStorage.getItem('token');
+            if (!token) {
+                alert("Yetkilendirme hatası: Lütfen giriş yapın.");
+                return;
+            }
+
+            username = getUsernameFromToken(token);
+            if (!username) {
+                alert("Kullanıcı adı alınamadı: Lütfen tekrar giriş yapın.");
+                return;
+            }
+
+            const socket = new SockJS('http://localhost:8080/chat-websocket');
+            stompClient = Stomp.over(socket);
+
+            stompClient.connect({ Authorization: `Bearer ${token}` }, function (frame) {
+                console.log('Bağlandı: ' + frame);
+                fetchGroups();
+            }, function (error) {
+                console.error('Bağlantı hatası:', error);
+                alert("WebSocket bağlantısı başarısız oldu.");
+            });
+        }
+
+        function fetchGroups() {
+            fetch('http://localhost:8080/api/groups')
+                .then(response => response.json())
+                .then(groups => {
+                    const groupArea = document.getElementById("groupArea");
+                    groupArea.innerHTML = ""; // Önceki listeyi temizle
+                    groups.forEach(group => {
+                        const groupButton = document.createElement('button');
+                        groupButton.textContent = group.name;
+                        groupButton.addEventListener('click', () => joinGroup(group.name));
+                        groupArea.appendChild(groupButton);
+                    });
+                })
+                .catch(error => console.error('Gruplar alınırken hata:', error));
+        }
+
+        function joinGroup(groupName) {
+            if (currentGroup) {
+                stompClient.unsubscribe(`/topic/${currentGroup}`);
+            }
+
+            currentGroup = groupName;
+            const messageArea = document.getElementById("messageArea");
+            messageArea.innerHTML = ""; // Önceki mesajları temizle
+
+            // Grubun geçmiş mesajlarını çek
+            fetch(`http://localhost:8080/group/${groupName}/messages`)
+                .then(response => response.json())
+                .then(messages => {
+                    messages.forEach(message => showMessage(message));
+                })
+                .catch(error => console.error('Grup mesajları alınırken hata:', error));
+
+            // Grubun mesaj kanalına abone ol
+            stompClient.subscribe(`/topic/${groupName}`, function (message) {
+                showMessage(JSON.parse(message.body));
+            });
+        }
+
+        function sendMessage() {
+            const messageContent = document.getElementById("message").value;
+            if (messageContent && currentGroup) {
+                const message = {
+                    groupname: currentGroup,
+                    sender: username,
+                    content: messageContent
+                };
+
+                stompClient.send(`/app/chat.sendGroupMessage`, {}, JSON.stringify(message));
+                document.getElementById("message").value = "";
+                showMessage(message);
+            } else {
+                alert("Lütfen bir grup seçin ve bir mesaj yazın.");
+            }
+        }
+
+        function showMessage(message) {
+            const messageArea = document.getElementById("messageArea");
+            const messageElement = document.createElement('li');
+
+            if (message.sender === username) {
+                messageElement.textContent = `Sen: ${message.content}`;
+                messageElement.style.textAlign = 'right';
+            } else {
+                messageElement.textContent = `${message.sender}: ${message.content}`;
+                messageElement.style.textAlign = 'left';
+            }
+
+            messageArea.appendChild(messageElement);
+            messageArea.scrollTop = messageArea.scrollHeight;
+        }
+
+        window.onload = function () {
+            connect();
+        };
+    </script>
+    <link rel="stylesheet" href="login.css">
+</head>
+<body>
+<div class="group-list" id="groupArea">
+    <h3>Gruplar</h3>
+</div>
+<div class="chat-content">
+    <ul id="messageArea" class="message-area"></ul>
+    <div class="chat-input">
+        <input type="text" id="message" placeholder="Mesajınızı yazın..." />
+        <button onclick="sendMessage()">Gönder</button>
+    </div>
+</div>
+</body>
+</html>
